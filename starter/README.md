@@ -4,13 +4,20 @@
 
 ## Files
 
-- `p4/warmup_example.p4`: یک نمونه‌ی بسیار کوچک P4 که فقط ساختار کلی header، parser، control و deparser را نشان می‌دهد و compile می‌شود.
-- `topology/topology.py`: توپولوژی Mininet با یک BMv2 switch و شش host.
-- `scripts/compile.sh`: compile کردن یک فایل P4 به BMv2 JSON.
-- `scripts/run_mininet.sh`: اجرای topology با JSON انتخاب‌شده.
-- `scripts/capture.sh`: کمک برای گرفتن packet capture.
-- `scripts/smoke_test.sh`: بررسی سریع اینکه محیط و topology قابل اجرا هستند.
-- `config/`: محل پیشنهادی برای فایل‌های runtime configuration شما.
+- `p4/warmup_example.p4`:
+یک نمونه‌ی بسیار کوچک P4 که فقط ساختار کلی header، parser، control و deparser را نشان می‌دهد و compile می‌شود.
+- `topology/topology.py`:
+توپولوژی Mininet با یک BMv2 switch و شش host.
+- `scripts/compile.sh`:
+برای compile کردن یک فایل P4 به BMv2 JSON.
+- `scripts/run_mininet.sh`:
+اجرای topology با JSON انتخاب‌شده.
+- `scripts/capture.sh`:
+کمک برای گرفتن packet capture.
+- `scripts/smoke_test.sh`:
+بررسی سریع اینکه محیط و topology قابل اجرا هستند.
+- `config/`:
+محل پیشنهادی برای فایل‌های runtime configuration شما.
 
 ## What Is Not Provided
 
