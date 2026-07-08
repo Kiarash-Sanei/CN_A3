@@ -4,7 +4,7 @@
 
 ## Build
 
-Recommended for all supported student platforms:
+مناسب برای همه‌ پلتفرم ها:
 
 ```bash
 docker buildx build --platform linux/amd64 --load -t p4-dataplane-hw .
