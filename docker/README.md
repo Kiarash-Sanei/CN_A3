@@ -16,7 +16,8 @@ docker buildx build --platform linux/amd64 --load -t p4-dataplane-hw .
 docker run --rm -it --platform linux/amd64 --privileged -v "$PWD":/workspace p4-dataplane-hw
 ```
 
-`--privileged` برای Mininet لازم است، چون Mininet باید network namespace، veth pair و interfaceهای مجازی بسازد و تغییر دهد.
+`--privileged`:
+برای Mininet لازم است، چون Mininet باید network namespace، veth pair و interfaceهای مجازی بسازد و تغییر دهد.
 
 ## Verify
 
@@ -42,9 +43,9 @@ docker/verify-env.sh
 
 ## Platform Notes
 
-Linux x86_64 معمولا کم‌دردسرترین محیط است. روی Linux x86_64، اگر `docker buildx` در دسترس نبود، `docker build -t p4-dataplane-hw .` نیز معمولا کافی است.
+محیط Linux x86_64 معمولا کم‌دردسرترین است. روی Linux x86_64، اگر `docker buildx` در دسترس نبود، `docker build -t p4-dataplane-hw .` نیز معمولا کافی است.
 
-macOS Intel و macOS Apple Silicon با Docker Desktop قابل استفاده‌اند، اما Mininet در container روی Docker Desktop همیشه رفتاری کاملا مشابه Linux native ندارد. packageهای p4lang در این Dockerfile برای `amd64` استفاده می‌شوند؛ بنابراین روی Apple Silicon حتما image را با `--platform linux/amd64` بسازید و اجرا کنید:
+اما macOS Intel و macOS Apple Silicon با Docker Desktop قابل استفاده‌اند، اما Mininet در container روی Docker Desktop همیشه رفتاری کاملا مشابه Linux native ندارد. packageهای p4lang در این Dockerfile برای `amd64` استفاده می‌شوند؛ بنابراین روی Apple Silicon حتما image را با `--platform linux/amd64` بسازید و اجرا کنید:
 
 ```bash
 docker buildx build --platform linux/amd64 --load -t p4-dataplane-hw .
