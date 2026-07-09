@@ -34,14 +34,17 @@ class P4Switch(Switch):
 
         cmd = [
             "simple_switch",
-            "--log-console",
             "--thrift-port",
             str(self.thrift_port),
             *intf_args,
             self.json_path,
         ]
         info(f"*** Starting {self.name}: {' '.join(cmd)}\n")
-        self.process = subprocess.Popen(cmd)
+        log_path = f"/tmp/{self.name}-simple_switch.log"
+        log_file = open(log_path, "w", encoding="utf-8")
+        self.process = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
+        self.log_file = log_file
+        info(f"*** BMv2 log: {log_path}\n")
         time.sleep(1)
 
     def stop(self, deleteIntfs=True):
@@ -51,6 +54,8 @@ class P4Switch(Switch):
                 self.process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 self.process.kill()
+        if getattr(self, "log_file", None) is not None:
+            self.log_file.close()
         super().stop(deleteIntfs)
 
 
