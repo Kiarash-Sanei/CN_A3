@@ -2,6 +2,8 @@
 
 This repository contains the starter environment for a practical homework in the Computer Networks course at the Department of Computer Engineering, Sharif University of Technology.
 
+**Author:** Parmis Hemasian
+
 The homework focuses on the network-layer data plane. You will use P4, BMv2 `simple_switch`, Mininet, Docker, and packet-capture tools to design and test a programmable switch.
 
 The assignment handout is distributed separately by the course staff. It is not included in this repository. This repository only provides the runnable development environment and a minimal starter topology.
