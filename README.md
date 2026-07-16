@@ -1,221 +1,170 @@
-# Computer Networks HW3: P4 Data Plane Starter
+# CN HW3 — P4 Data Plane (BMv2 / Mininet)
 
-This repository contains the starter environment for a practical homework in the Computer Networks course at the Department of Computer Engineering, Sharif University of Technology.
+A programmable edge switch `s1` implemented in P4-16 for the BMv2
+`simple_switch` target. It routes IPv4 by longest-prefix match, classifies
+traffic, marks DSCP for QoS, and enforces a security policy — entirely in the
+data plane. No routing protocol or dynamic control-plane algorithm is used; the
+match-action tables are populated with static entries loaded over the BMv2
+Thrift CLI.
 
-**Author:** Parmis Hemasian
-
-The homework focuses on the network-layer data plane. You will use P4, BMv2 `simple_switch`, Mininet, Docker, and packet-capture tools to design and test a programmable switch.
-
-The assignment handout is distributed separately by the course staff. It is not included in this repository. This repository only provides the runnable development environment and a minimal starter topology.
-
-## What Is Included
-
-- A Docker-based P4 development environment
-- BMv2 / `simple_switch`
-- Mininet topology with one programmable switch and six hosts
-- A very small warmup P4 program
-- Helper scripts for compiling, running, capturing traffic, testing the environment, and cleaning Mininet
-
-## What Is Not Included
-
-This repository does not contain the solution.
-
-In particular, it does not provide:
-
-- A completed IPv4 router
-- Forwarding tables or route entries
-- A firewall implementation
-- A traffic classifier
-- QoS / DSCP marking logic
-- A complete P4 pipeline architecture
-
-You are expected to design and implement the actual data-plane pipeline yourself.
-
-## Repository Layout
-
-```text
-.
-├── Dockerfile
-├── docker/
-│   ├── entrypoint.sh
-│   ├── verify-env.sh
-│   └── README.md
-├── starter/
-│   ├── README.md
-│   ├── p4/
-│   │   └── warmup_example.p4
-│   ├── topology/
-│   │   └── topology.py
-│   ├── scripts/
-│   │   ├── compile.sh
-│   │   ├── run_mininet.sh
-│   │   ├── cleanup.sh
-│   │   ├── capture.sh
-│   │   └── smoke_test.sh
-│   └── config/
-│       └── README.md
-└── README.md
+## Files
+```
+src/dataplane.p4     # the P4-16 program (v1model / simple_switch)
+src/s1-commands.txt  # static table entries (simple_switch_CLI format)
+src/README.md        # this file
 ```
 
-## Clone The Repository
-
-Use the released version of the repository, not a random branch state:
-
-```bash
-git clone https://github.com/promise2-4/CN2026-HW3-P4-Dataplane.git
-cd CN2026-HW3-P4-Dataplane
-git checkout v1.0
+## Pipeline design
+Ingress processing runs four match-action stages in this order:
 ```
+parse (Eth, IPv4, TCP/UDP/ICMP)
+  -> sec_policy (ternary firewall)
+  -> classify   (ternary; result stored in meta.class_id)
+  -> qos_mark   (exact class_id -> DSCP)
+  -> TTL check  (drop expired packets)
+  -> ipv4_lpm   (LPM: forward + MAC rewrite + TTL--)
+  -> deparse + IPv4 checksum recompute
+```
+The firewall runs first so forbidden packets are dropped before any expensive
+forwarding, marking, or checksum work. Classification happens before QoS so the
+DSCP value can be derived from the traffic class carried in `meta.class_id`.
 
-## Build The Docker Image
+| Table | Match kind | Purpose | Key actions |
+| --- | --- | --- | --- |
+| `sec_policy` | ternary | firewall (wildcards on src/dst prefixes) | `drop_pkt`, `allow` |
+| `classify` | ternary | traffic class from (protocol, L4 port) | `set_class` |
+| `qos_mark` | exact | class → DSCP | `set_dscp` |
+| `ipv4_lpm` | LPM | forward on dst IPv4 | `ipv4_forward`, `drop_pkt` |
 
-Recommended command for Linux, macOS Intel, macOS Apple Silicon, and Windows with WSL2:
+## Traffic classes and DSCP
+| Class | Match | DSCP | tcpdump ToS |
+| --- | --- | --- | --- |
+| Interactive | ICMP, TCP/22 (SSH) | 46 (EF) | `tos 0xb8` |
+| Web | TCP/80, TCP/443 | 34 (AF41) | `tos 0x88` |
+| UDP service | any UDP | 26 (AF31) | `tos 0x68` |
+| Other / Bulk | everything else (default) | 0 (BE) | `tos 0x0` |
 
+## Security policy (in the data plane)
+- Students (`10.0.1.0/24`) **cannot** reach the Admin subnet (`10.0.4.0/24`).
+- Staff (`10.0.2.0/24`) **can** reach the Admin subnet (allowed by default).
+- Research (`10.0.3.0/24`) **can** reach the external host.
+- Student ↔ student traffic is allowed.
+- **Extra policy:** the external host (`10.0.5.0/24`) **cannot** reach the Admin
+  subnet, protecting the sensitive server from the outside.
+
+The two drop rules are non-overlapping, so their ternary priority values do not
+conflict; anything not matched falls through to `default_action = allow`.
+
+## Topology model (important)
+The provided `starter/topology/topology.py` makes `s1` a pure **L3 router**:
+each host has a default route via its gateway `10.0.X.1`, and a static ARP entry
+mapping that gateway to a single gateway MAC `00:aa:bb:00:00:01`. Inter-subnet
+packets therefore reach `s1` with `eth.dst = 00:aa:bb:00:00:01`; `ipv4_forward`
+rewrites `eth.dst` to the destination host's real MAC, moves the old dst into
+`eth.src`, and decrements the TTL.
+
+Host / port / MAC map (from `topology.py`):
+
+| Host | Role | IP | Port | MAC |
+| --- | --- | --- | --- | --- |
+| h1 | Student | 10.0.1.10 | 1 | 00:00:00:00:01:10 |
+| h2 | Student | 10.0.1.20 | 2 | 00:00:00:00:01:20 |
+| h3 | Staff | 10.0.2.30 | 3 | 00:00:00:00:02:30 |
+| h4 | Research | 10.0.3.40 | 4 | 00:00:00:00:03:40 |
+| h5 | Admin server | 10.0.4.50 | 5 | 00:00:00:00:04:50 |
+| h6 | External | 10.0.5.60 | 6 | 00:00:00:00:05:60 |
+
+## 0. Build the image and start the container
+From the repository root:
 ```bash
 docker buildx build --platform linux/amd64 --load -t p4-dataplane-hw .
-```
-
-The P4 packages used by this Docker image are available for `linux/amd64`. On Apple Silicon, Docker Desktop runs the image through emulation.
-
-## Start The Development Container
-
-From the repository root:
-
-```bash
 docker run --rm -it --platform linux/amd64 --privileged -v "$PWD":/workspace p4-dataplane-hw
+docker/verify-env.sh      # expect: "Environment verification passed."
 ```
 
-`--privileged` is needed because Mininet creates network namespaces, virtual Ethernet interfaces, and switch links inside the container.
-
-If Docker gives the container a random name such as `great_johnson`, that is normal. Docker automatically generates names when `--name` is not provided.
-
-## Verify The Environment
-
-Inside the container, run:
-
+## 1. Compile the P4 program
 ```bash
-docker/verify-env.sh
+starter/scripts/compile.sh src/dataplane.p4
+# expect: "Compilation succeeded: src/dataplane.json"
 ```
 
-This checks that the main tools are available:
-
-- `p4c`
-- `simple_switch`
-- `simple_switch_CLI`
-- `mn`
-- `python3`
-- `tcpdump`
-- `tshark`
-- `scapy`
-
-The script should end with:
-
-```text
-Environment verification passed.
-```
-
-## Compile The Warmup P4 Program
-
-Inside the container:
-
+## 2. Start the topology (switch s1 + 6 hosts)
 ```bash
-starter/scripts/compile.sh starter/p4/warmup_example.p4
+starter/scripts/run_mininet.sh src/dataplane.json
 ```
+This prints the BMv2 thrift port (`9090`) and drops you into `mininet>`.
 
-This should generate:
-
-```text
-starter/p4/warmup_example.json
-```
-
-The warmup program is intentionally tiny. It only demonstrates basic P4 structure and does not solve the homework.
-
-## Run The Starter Topology
-
-After compiling a P4 program:
-
+## 3. Load the static table entries into s1
+In a **second terminal** inside the same container:
 ```bash
-starter/scripts/run_mininet.sh starter/p4/warmup_example.json
+simple_switch_CLI --thrift-port 9090 < src/s1-commands.txt
+```
+Confirm the port/MAC map once with `mininet> net`.
+
+## 4. Tests and evidence
+
+### 4.1 Forwarding — allowed inter-subnet flows should succeed
+```
+mininet> h3 ping -c3 h5     # Staff   -> Admin : PASS
+mininet> h4 ping -c3 h6     # Research-> Ext   : PASS
 ```
 
-The topology contains one BMv2 switch, `s1`, and six hosts:
+### 4.2 Intra-subnet flow (student ↔ student)
+h1 and h2 share `10.0.1.0/24`, so h1 treats h2 as on-link and ARPs for it
+directly (no gateway). The starter sets a static ARP only for the gateway, so
+add a peer ARP entry once before this test:
+```
+mininet> h1 ip neigh add 10.0.1.20 lladdr 00:00:00:00:01:20 dev h1-eth0 nud permanent
+mininet> h2 ip neigh add 10.0.1.10 lladdr 00:00:00:00:01:10 dev h2-eth0 nud permanent
+mininet> h1 ping -c3 h2     # Student <-> Student : PASS
+```
 
-| Host | Role | IP address |
-| --- | --- | --- |
-| `h1` | Student subnet | `10.0.1.10/24` |
-| `h2` | Student subnet | `10.0.1.20/24` |
-| `h3` | Staff subnet | `10.0.2.30/24` |
-| `h4` | Research subnet | `10.0.3.40/24` |
-| `h5` | Admin server subnet | `10.0.4.50/24` |
-| `h6` | External host | `10.0.5.60/24` |
+### 4.3 Security policy — blocked flows should fail (100% loss)
+```
+mininet> h1 ping -c3 h5     # Student  -> Admin : blocked
+mininet> h6 ping -c3 h5     # External -> Admin : blocked (extra policy)
+```
 
-This topology is only a starting point. Correct forwarding, filtering, classification, and QoS behavior must come from your own P4 program and runtime configuration.
+### 4.4 DSCP marking — capture on the receiver
+```
+mininet> h5 tcpdump -i h5-eth0 -vv -n icmp &
+mininet> h3 ping -c2 h5           # ICMP -> Interactive -> tos 0xb8 (DSCP 46)
+```
+UDP service (DSCP 26) and Web (DSCP 34):
+```
+mininet> h5 iperf -s -u &
+mininet> h4 iperf -c 10.0.4.50 -u -b 1M -t 2     # UDP -> tos 0x68 (DSCP 26)
+mininet> h5 tcpdump -i h5-eth0 -vv -n tcp &
+mininet> h5 iperf -s & ; mininet> h3 iperf -c 10.0.4.50 -t 2   # TCP (staff->admin)
+```
 
-## Run A Smoke Test
+### 4.5 TTL behaviour
+```
+mininet> h3 ping -c2 -t 1 h5     # TTL=1 -> decremented to 0 -> dropped (expired)
+mininet> h3 ping -c2 h5          # normal TTL -> forwarded, TTL-1 in tcpdump
+```
 
-To check that the warmup program compiles and the topology can start:
+### 4.6 Negative test — unknown destination
+```
+mininet> h3 ping -c2 10.0.9.99   # no LPM entry -> default_action drop -> 100% loss
+```
 
+### Saving evidence (for the zip)
 ```bash
-starter/scripts/smoke_test.sh
+# capture with DSCP (h5 is on switch port s1-eth5):
+sudo tcpdump -i s1-eth5 -vv -n -w captures/dscp_icmp.pcap icmp
+# copy each mininet test's console output into evidence/terminal-outputs.txt
 ```
 
-This does not test the homework requirements. It only checks that the environment can compile a P4 program and start Mininet with BMv2.
+## Notes / limitations
+- Tables are static (no dynamic control plane), as required.
+- IPv6 is not handled; only IPv4 is parsed and forwarded.
+- BMv2 is a functional model, not a performance benchmark.
+- The switch does not answer ARP; inter-subnet traffic relies on the gateway
+  ARP entry set by the topology, and the intra-subnet test needs the one-line
+  peer ARP entry shown in 4.2.
 
-## Capture Packets
-
-Example:
-
-```bash
-starter/scripts/capture.sh h1-eth0
-```
-
-With a filter:
-
-```bash
-starter/scripts/capture.sh h5-eth0 "ip"
-```
-
-For DSCP verification, use `tcpdump -vv`, `tshark`, or Wireshark.
-
-## Clean Mininet
-
-If Mininet exits unexpectedly or leaves stale interfaces:
-
-```bash
-starter/scripts/cleanup.sh
-```
-
-## Platform Notes
-
-Linux is the most reliable platform for Mininet. Docker Desktop on macOS and Windows usually works for this starter environment, but some Mininet networking behavior can differ from native Linux.
-
-If you have persistent Mininet or packet-capture issues on macOS or Windows, use one of these options:
-
-- Run the same Docker image inside a Linux VM
-- Use WSL2 on Windows
-- Use a Linux machine provided by the course staff
-
-## Expected Submission
-
-Follow the official assignment handout for the exact submission rules. In general, your submission should include:
-
-- Your P4 source code
-- Any runtime command/configuration files needed to load table entries
-- Packet captures used as evidence
-- Terminal outputs for your tests
-- `report.pdf` with your design summary, test table, and known limitations
-- A short demo video, if required by the handout
-
-Do not submit only code. The assignment requires evidence that your data-plane behavior is correct.
-
-## AI Tool Policy
-
-You may use AI tools if allowed by the course policy, but you must understand everything you submit. You should be able to explain your pipeline, tables, actions, metadata, test results, and packet captures.
-
-Code or text that you cannot explain may lose credit.
-
-## License
-
-This starter repository is released under the Apache License 2.0. This choice is intended to be compatible with the licensing style used across the main P4 open-source ecosystem, including [`p4lang/p4c`](https://github.com/p4lang/p4c), [`p4lang/behavioral-model`](https://github.com/p4lang/behavioral-model), and [`p4lang/tutorials`](https://github.com/p4lang/tutorials).
-
-P4, BMv2, Mininet, Wireshark/TShark, Docker, and other tools used by this repository remain under their own upstream licenses. This repository does not claim ownership of those projects.
+---
+Based on the CN HW3 P4 Data Plane starter by Parmis Hemasian, licensed under the
+Apache License 2.0. This README has been rewritten and modified for this
+submission.
