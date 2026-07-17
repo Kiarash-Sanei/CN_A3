@@ -1,0 +1,41 @@
+sh mkdir -p /workspace/captures /workspace/evidence
+sh printf '' > /workspace/evidence/terminal-outputs.txt
+h1 ip addr replace 10.0.1.10/24 dev h1-eth0
+h2 ip addr replace 10.0.1.20/24 dev h2-eth0
+h3 ip addr replace 10.0.2.30/24 dev h3-eth0
+h4 ip addr replace 10.0.3.40/24 dev h4-eth0
+h5 ip addr replace 10.0.4.50/24 dev h5-eth0
+h6 ip addr replace 10.0.5.60/24 dev h6-eth0
+h1 ip route replace default via 10.0.1.1 dev h1-eth0
+h2 ip route replace default via 10.0.1.1 dev h2-eth0
+h3 ip route replace default via 10.0.2.1 dev h3-eth0
+h4 ip route replace default via 10.0.3.1 dev h4-eth0
+h5 ip route replace default via 10.0.4.1 dev h5-eth0
+h6 ip route replace default via 10.0.5.1 dev h6-eth0
+h1 ip neigh replace 10.0.1.1 lladdr 00:aa:bb:00:00:01 dev h1-eth0 nud permanent
+h2 ip neigh replace 10.0.1.1 lladdr 00:aa:bb:00:00:01 dev h2-eth0 nud permanent
+h3 ip neigh replace 10.0.2.1 lladdr 00:aa:bb:00:00:01 dev h3-eth0 nud permanent
+h4 ip neigh replace 10.0.3.1 lladdr 00:aa:bb:00:00:01 dev h4-eth0 nud permanent
+h5 ip neigh replace 10.0.4.1 lladdr 00:aa:bb:00:00:01 dev h5-eth0 nud permanent
+h6 ip neigh replace 10.0.5.1 lladdr 00:aa:bb:00:00:01 dev h6-eth0 nud permanent
+h1 ip neigh replace 10.0.1.20 lladdr 00:00:00:00:01:20 dev h1-eth0 nud permanent
+h2 ip neigh replace 10.0.1.10 lladdr 00:00:00:00:01:10 dev h2-eth0 nud permanent
+h5 tcpdump -i h5-eth0 -c 4 -w /workspace/captures/dscp_icmp.pcap icmp &
+sh sleep 1
+sh echo '=== TEST 1  h3 -> h5  Staff->Admin  (expect: success) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h3 ping -c3 h5 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 2  h4 -> h6  Research->External  (expect: success) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h4 ping -c3 h6 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 3  h1 -> h2  Student<->Student  (expect: success) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h1 ping -c3 h2 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 4  h1 -> h5  Student->Admin  (expect: 100% loss, blocked) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h1 ping -c3 h5 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 5  h6 -> h5  External->Admin  (expect: 100% loss, extra policy) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h6 ping -c3 h5 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 6  h3 -> h5  TTL=1  (expect: 100% loss, expired at switch) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h3 ping -c2 -t 1 h5 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 7  h3 -> 10.0.9.99  unknown dest  (expect: 100% loss, default drop) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h3 ping -c2 10.0.9.99 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh sleep 2
+sh echo '=== TEST 8  DSCP readback: echo-request lines show tos 0xb8 = DSCP 46 (EF) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h5 tcpdump -r /workspace/captures/dscp_icmp.pcap -vv -n 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
