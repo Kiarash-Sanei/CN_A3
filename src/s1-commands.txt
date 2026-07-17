@@ -1,68 +1,14 @@
-# =====================================================================
-#  s1-commands.txt  -  static table entries for dataplane.p4 (s1)
-#  Load in a second terminal, AFTER run_mininet.sh is up:
-#      simple_switch_CLI --thrift-port 9090 < src/s1-commands.txt
-#
-#  Topology model (from starter/topology/topology.py):
-#    s1 acts as an L3 router. Every host has a default route via its
-#    gateway 10.0.X.1, and a static ARP mapping that gateway to the
-#    single gateway MAC 00:aa:bb:00:00:01. So inter-subnet packets reach
-#    s1 with eth.dst = 00:aa:bb:00:00:01; ipv4_forward rewrites eth.dst
-#    to the destination host's real MAC (and decrements TTL).
-#
-#  Real host / port / MAC map (matches topology.py exactly):
-#     h1 10.0.1.10  port 1  00:00:00:00:01:10   (Student)
-#     h2 10.0.1.20  port 2  00:00:00:00:01:20   (Student)
-#     h3 10.0.2.30  port 3  00:00:00:00:02:30   (Staff)
-#     h4 10.0.3.40  port 4  00:00:00:00:03:40   (Research)
-#     h5 10.0.4.50  port 5  00:00:00:00:04:50   (Admin server)
-#     h6 10.0.5.60  port 6  00:00:00:00:05:60   (External)
-#  (Mininet assigns switch ports in host-add order h1..h6 = ports 1..6.
-#   Confirm once with `mininet> net` if unsure.)
-# =====================================================================
-
-# ---------------------------------------------------------------------
-# (4) SECURITY POLICY  (ternary firewall).  Non-overlapping rules, so
-#     the priority value (last field) does not create conflicts.
-#     Everything not matched here falls through to default_action=allow.
-# ---------------------------------------------------------------------
-# students (10.0.1.0/24) -> Admin server subnet (10.0.4.0/24) : BLOCK
 table_add sec_policy drop_pkt 10.0.1.0&&&255.255.255.0 10.0.4.0&&&255.255.255.0 => 1
-# external host (10.0.5.0/24) -> Admin server subnet : BLOCK  (my extra policy)
 table_add sec_policy drop_pkt 10.0.5.0&&&255.255.255.0 10.0.4.0&&&255.255.255.0 => 1
-#   staff (10.0.2.0/24) -> Admin : allowed by default_action (no drop rule)
-#   student <-> student, research -> external : allowed by default
-
-# ---------------------------------------------------------------------
-# (2) CLASSIFICATION  (ternary).  key = (protocol, L4 dst port).
-#     Result stored in meta.class_id.  Rules are mutually exclusive.
-#     1=Interactive 2=Web 3=UDPservice 4=Other(default)
-# ---------------------------------------------------------------------
-# ICMP  -> Interactive
 table_add classify set_class 0x01&&&0xff 0&&&0x0000 => 1 1
-# TCP/22 (SSH) -> Interactive
 table_add classify set_class 0x06&&&0xff 22&&&0xffff => 1 1
-# TCP/80 (HTTP) -> Web
 table_add classify set_class 0x06&&&0xff 80&&&0xffff => 2 1
-# TCP/443 (HTTPS) -> Web
 table_add classify set_class 0x06&&&0xff 443&&&0xffff => 2 1
-# any UDP -> UDP service
 table_add classify set_class 0x11&&&0xff 0&&&0x0000 => 3 1
-#   everything else -> Other/Bulk via default_action=set_class(4)
-
-# ---------------------------------------------------------------------
-# (3) QoS MARKING  (exact class_id -> DSCP)
-# ---------------------------------------------------------------------
-table_add qos_mark set_dscp 1 => 46      # Interactive -> EF (DSCP 46)
-table_add qos_mark set_dscp 2 => 34      # Web         -> AF41 (DSCP 34)
-table_add qos_mark set_dscp 3 => 26      # UDP service -> AF31 (DSCP 26)
-table_add qos_mark set_dscp 4 => 0       # Other/Bulk  -> BE (DSCP 0)
-
-# ---------------------------------------------------------------------
-# (1) FORWARDING  (LPM on dst IPv4).  /32 host routes (still LPM).
-#     dstMac = the destination host's REAL MAC (from topology.py).
-#     Unknown destinations hit default_action = drop_pkt (documented).
-# ---------------------------------------------------------------------
+table_add qos_mark set_dscp 1 => 46
+table_add qos_mark set_dscp 2 => 34
+table_add qos_mark set_dscp 3 => 26
+table_add qos_mark set_dscp 4 => 0
 table_add ipv4_lpm ipv4_forward 10.0.1.10/32 => 00:00:00:00:01:10 1
 table_add ipv4_lpm ipv4_forward 10.0.1.20/32 => 00:00:00:00:01:20 2
 table_add ipv4_lpm ipv4_forward 10.0.2.30/32 => 00:00:00:00:02:30 3
