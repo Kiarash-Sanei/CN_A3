@@ -1,69 +1,73 @@
 # CN HW3 — P4 Data Plane (BMv2 / Mininet)
 
-A programmable edge switch `s1` implemented in P4-16 for the BMv2
-`simple_switch` target. It routes IPv4 by longest-prefix match, classifies
+A programmable edge switch `s1` written in P4-16 for the BMv2 `simple_switch`
+target. It parses packets, forwards IPv4 by longest-prefix match, classifies
 traffic, marks DSCP for QoS, and enforces a security policy — entirely in the
 data plane. No routing protocol or dynamic control-plane algorithm is used; the
-match-action tables are populated with static entries loaded over the BMv2
-Thrift CLI.
+match-action tables are filled with static entries loaded over the Thrift CLI.
 
 ## Files
 ```
 src/dataplane.p4     # the P4-16 program (v1model / simple_switch)
 src/s1-commands.txt  # static table entries (simple_switch_CLI format)
+run1.sh              # TERMINAL 1 launcher (build + compile + Mininet CLI)
+run2.sh              # TERMINAL 2 launcher (load the tables)
 src/README.md        # this file
 ```
 
-## Pipeline design
-Ingress processing runs four match-action stages in this order:
+## Host vs. container — read this first
+Everything (p4c, mininet, simple_switch, tcpdump) lives **inside the Docker
+container**, not on your host. Your host only runs `docker` commands.
+
+**Why the old "just paste the whole file" approach failed:** a line like
+`docker run -it ...` opens an *interactive* shell and blocks; any lines written
+after it never run inside the container (they run on the host later, where p4c
+and mininet do not exist, so they error). `run_mininet.sh` is interactive too —
+it opens the `mininet>` prompt and stays there. That is exactly why the commands
+had to be pasted one by one. The two scripts below fix that by passing the setup
+commands *into* the container.
+
+## Fast path (two terminals)
+
+**Terminal 1** — on your host, from the repo root:
+```bash
+./run1.sh
 ```
-parse (Eth, IPv4, TCP/UDP/ICMP)
-  -> sec_policy (ternary firewall)
-  -> classify   (ternary; result stored in meta.class_id)
-  -> qos_mark   (exact class_id -> DSCP)
-  -> TTL check  (drop expired packets)
-  -> ipv4_lpm   (LPM: forward + MAC rewrite + TTL--)
-  -> deparse + IPv4 checksum recompute
+This builds the image (cached after the first time), then inside one container
+session: verifies tools, compiles `src/dataplane.p4` to `src/dataplane.json`,
+and opens the `mininet>` prompt (leave it open).
+
+**Terminal 2** — on your host, after `mininet>` appears:
+```bash
+./run2.sh
 ```
-The firewall runs first so forbidden packets are dropped before any expensive
-forwarding, marking, or checksum work. Classification happens before QoS so the
-DSCP value can be derived from the traffic class carried in `meta.class_id`.
+This attaches to the same container and loads `src/s1-commands.txt` into s1.
+For a clean load with no `DUPLICATE_ENTRY` lines, load the tables only once per
+Mininet session (restart Terminal 1 if you need to reload).
 
-| Table | Match kind | Purpose | Key actions |
-| --- | --- | --- | --- |
-| `sec_policy` | ternary | firewall (wildcards on src/dst prefixes) | `drop_pkt`, `allow` |
-| `classify` | ternary | traffic class from (protocol, L4 port) | `set_class` |
-| `qos_mark` | exact | class → DSCP | `set_dscp` |
-| `ipv4_lpm` | LPM | forward on dst IPv4 | `ipv4_forward`, `drop_pkt` |
+Then run the tests **back in Terminal 1**, at the `mininet>` prompt (below).
 
-## Traffic classes and DSCP
-| Class | Match | DSCP | tcpdump ToS |
-| --- | --- | --- | --- |
-| Interactive | ICMP, TCP/22 (SSH) | 46 (EF) | `tos 0xb8` |
-| Web | TCP/80, TCP/443 | 34 (AF41) | `tos 0x88` |
-| UDP service | any UDP | 26 (AF31) | `tos 0x68` |
-| Other / Bulk | everything else (default) | 0 (BE) | `tos 0x0` |
+## Manual path (if you prefer to type each step)
+```bash
+# host:
+docker buildx build --platform linux/amd64 --load -t p4-dataplane-hw .
+docker run --rm -it --platform linux/amd64 --privileged -v "$PWD":/workspace p4-dataplane-hw
+# now INSIDE the container:
+cd /workspace
+docker/verify-env.sh
+starter/scripts/compile.sh src/dataplane.p4
+starter/scripts/run_mininet.sh src/dataplane.json      # stays at mininet>
+# second host terminal, attach to the SAME container:
+docker exec -it "$(docker ps -q --filter ancestor=p4-dataplane-hw | head -1)" bash
+cd /workspace && simple_switch_CLI --thrift-port 9090 < src/s1-commands.txt
+```
 
-## Security policy (in the data plane)
-- Students (`10.0.1.0/24`) **cannot** reach the Admin subnet (`10.0.4.0/24`).
-- Staff (`10.0.2.0/24`) **can** reach the Admin subnet (allowed by default).
-- Research (`10.0.3.0/24`) **can** reach the external host.
-- Student ↔ student traffic is allowed.
-- **Extra policy:** the external host (`10.0.5.0/24`) **cannot** reach the Admin
-  subnet, protecting the sensitive server from the outside.
-
-The two drop rules are non-overlapping, so their ternary priority values do not
-conflict; anything not matched falls through to `default_action = allow`.
-
-## Topology model (important)
-The provided `starter/topology/topology.py` makes `s1` a pure **L3 router**:
-each host has a default route via its gateway `10.0.X.1`, and a static ARP entry
-mapping that gateway to a single gateway MAC `00:aa:bb:00:00:01`. Inter-subnet
-packets therefore reach `s1` with `eth.dst = 00:aa:bb:00:00:01`; `ipv4_forward`
-rewrites `eth.dst` to the destination host's real MAC, moves the old dst into
-`eth.src`, and decrements the TTL.
-
-Host / port / MAC map (from `topology.py`):
+## Topology model
+`starter/topology/topology.py` makes `s1` a pure L3 router: each host has a
+default route via its gateway `10.0.X.1`, with a static ARP mapping that gateway
+to a single gateway MAC `00:aa:bb:00:00:01`. Inter-subnet packets reach `s1`
+with `eth.dst = 00:aa:bb:00:00:01`; `ipv4_forward` rewrites `eth.dst` to the
+destination host's real MAC and decrements the TTL.
 
 | Host | Role | IP | Port | MAC |
 | --- | --- | --- | --- | --- |
@@ -74,95 +78,49 @@ Host / port / MAC map (from `topology.py`):
 | h5 | Admin server | 10.0.4.50 | 5 | 00:00:00:00:04:50 |
 | h6 | External | 10.0.5.60 | 6 | 00:00:00:00:05:60 |
 
-## 0. Build the image and start the container
-From the repository root:
-```bash
-docker buildx build --platform linux/amd64 --load -t p4-dataplane-hw .
-docker run --rm -it --platform linux/amd64 --privileged -v "$PWD":/workspace p4-dataplane-hw
-docker/verify-env.sh      # expect: "Environment verification passed."
+## Tests (type these at the `mininet>` prompt in Terminal 1)
+```
+h3 ping -c3 h5          # Staff  -> Admin    : success
+h4 ping -c3 h6          # Research-> External: success
+h1 ping -c3 h5          # Student -> Admin   : 100% loss (blocked)
+h6 ping -c3 h5          # External-> Admin   : 100% loss (extra policy)
+h3 ping -c2 -t 1 h5     # TTL=1 -> expired at switch -> 100% loss
+h3 ping -c2 10.0.9.99   # unknown dest -> default drop -> 100% loss
+```
+Student <-> student (same subnet, so add a peer ARP entry first):
+```
+h1 ip neigh add 10.0.1.20 lladdr 00:00:00:00:01:20 dev h1-eth0 nud permanent
+h2 ip neigh add 10.0.1.10 lladdr 00:00:00:00:01:10 dev h2-eth0 nud permanent
+h1 ping -c3 h2          # success
+```
+DSCP marking (look for `tos 0xb8` = DSCP 46):
+```
+h5 tcpdump -i h5-eth0 -vv -n icmp &
+h3 ping -c2 h5
 ```
 
-## 1. Compile the P4 program
-```bash
-starter/scripts/compile.sh src/dataplane.p4
-# expect: "Compilation succeeded: src/dataplane.json"
+## Pipeline (order of tables)
 ```
+parse -> sec_policy(ternary) -> classify(ternary) -> qos_mark(exact)
+      -> TTL check -> ipv4_lpm(LPM: forward + MAC rewrite + TTL--)
+      -> deparse + IPv4 checksum recompute
+```
+Firewall runs first so forbidden packets are dropped before any forwarding or
+marking work. The classification result travels to the QoS stage through
+`meta.class_id`. Full design discussion is in `report.pdf`.
 
-## 2. Start the topology (switch s1 + 6 hosts)
-```bash
-starter/scripts/run_mininet.sh src/dataplane.json
-```
-This prints the BMv2 thrift port (`9090`) and drops you into `mininet>`.
-
-## 3. Load the static table entries into s1
-In a **second terminal** inside the same container:
-```bash
-simple_switch_CLI --thrift-port 9090 < src/s1-commands.txt
-```
-Confirm the port/MAC map once with `mininet> net`.
-
-## 4. Tests and evidence
-
-### 4.1 Forwarding — allowed inter-subnet flows should succeed
-```
-mininet> h3 ping -c3 h5     # Staff   -> Admin : PASS
-mininet> h4 ping -c3 h6     # Research-> Ext   : PASS
-```
-
-### 4.2 Intra-subnet flow (student ↔ student)
-h1 and h2 share `10.0.1.0/24`, so h1 treats h2 as on-link and ARPs for it
-directly (no gateway). The starter sets a static ARP only for the gateway, so
-add a peer ARP entry once before this test:
-```
-mininet> h1 ip neigh add 10.0.1.20 lladdr 00:00:00:00:01:20 dev h1-eth0 nud permanent
-mininet> h2 ip neigh add 10.0.1.10 lladdr 00:00:00:00:01:10 dev h2-eth0 nud permanent
-mininet> h1 ping -c3 h2     # Student <-> Student : PASS
-```
-
-### 4.3 Security policy — blocked flows should fail (100% loss)
-```
-mininet> h1 ping -c3 h5     # Student  -> Admin : blocked
-mininet> h6 ping -c3 h5     # External -> Admin : blocked (extra policy)
-```
-
-### 4.4 DSCP marking — capture on the receiver
-```
-mininet> h5 tcpdump -i h5-eth0 -vv -n icmp &
-mininet> h3 ping -c2 h5           # ICMP -> Interactive -> tos 0xb8 (DSCP 46)
-```
-UDP service (DSCP 26) and Web (DSCP 34):
-```
-mininet> h5 iperf -s -u &
-mininet> h4 iperf -c 10.0.4.50 -u -b 1M -t 2     # UDP -> tos 0x68 (DSCP 26)
-mininet> h5 tcpdump -i h5-eth0 -vv -n tcp &
-mininet> h5 iperf -s & ; mininet> h3 iperf -c 10.0.4.50 -t 2   # TCP (staff->admin)
-```
-
-### 4.5 TTL behaviour
-```
-mininet> h3 ping -c2 -t 1 h5     # TTL=1 -> decremented to 0 -> dropped (expired)
-mininet> h3 ping -c2 h5          # normal TTL -> forwarded, TTL-1 in tcpdump
-```
-
-### 4.6 Negative test — unknown destination
-```
-mininet> h3 ping -c2 10.0.9.99   # no LPM entry -> default_action drop -> 100% loss
-```
-
-### Saving evidence (for the zip)
-```bash
-# capture with DSCP (h5 is on switch port s1-eth5):
-sudo tcpdump -i s1-eth5 -vv -n -w captures/dscp_icmp.pcap icmp
-# copy each mininet test's console output into evidence/terminal-outputs.txt
-```
+## Match-kind choices
+- `sec_policy` : ternary — wildcards on src/dst prefixes.
+- `classify`   : ternary — (protocol, port) with don't-cares.
+- `qos_mark`   : exact   — class_id is a small exact key.
+- `ipv4_lpm`   : LPM     — longest-prefix forwarding on dst IPv4.
 
 ## Notes / limitations
 - Tables are static (no dynamic control plane), as required.
 - IPv6 is not handled; only IPv4 is parsed and forwarded.
 - BMv2 is a functional model, not a performance benchmark.
-- The switch does not answer ARP; inter-subnet traffic relies on the gateway
-  ARP entry set by the topology, and the intra-subnet test needs the one-line
-  peer ARP entry shown in 4.2.
+- The switch does not answer ARP; the intra-subnet test needs the one-line peer
+  ARP entry shown above.
 
 ---
 Based on the CN HW3 P4 Data Plane starter by Parmis Hemasian, licensed under the
