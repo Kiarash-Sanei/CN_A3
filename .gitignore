@@ -16,5 +16,5 @@ __pycache__/
 *.pyc
 *.swp
 *.tmp
-./evidence/*
-./capture/*
+evidence/
+captures/
