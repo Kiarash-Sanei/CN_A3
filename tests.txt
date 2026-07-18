@@ -1,0 +1,37 @@
+sh mkdir -p /workspace/evidence
+sh printf '' > /workspace/evidence/terminal-outputs.txt
+h1 ip route replace default via 10.0.1.1 dev h1-eth0 onlink
+h2 ip route replace default via 10.0.1.1 dev h2-eth0 onlink
+h3 ip route replace default via 10.0.2.1 dev h3-eth0 onlink
+h4 ip route replace default via 10.0.3.1 dev h4-eth0 onlink
+h5 ip route replace default via 10.0.4.1 dev h5-eth0 onlink
+h6 ip route replace default via 10.0.5.1 dev h6-eth0 onlink
+h1 ip neigh replace 10.0.1.1 lladdr 00:aa:bb:00:00:01 dev h1-eth0 nud permanent
+h2 ip neigh replace 10.0.1.1 lladdr 00:aa:bb:00:00:01 dev h2-eth0 nud permanent
+h3 ip neigh replace 10.0.2.1 lladdr 00:aa:bb:00:00:01 dev h3-eth0 nud permanent
+h4 ip neigh replace 10.0.3.1 lladdr 00:aa:bb:00:00:01 dev h4-eth0 nud permanent
+h5 ip neigh replace 10.0.4.1 lladdr 00:aa:bb:00:00:01 dev h5-eth0 nud permanent
+h6 ip neigh replace 10.0.5.1 lladdr 00:aa:bb:00:00:01 dev h6-eth0 nud permanent
+sh echo '=== TEST 1  h3 -> h5  Staff->Admin  (expect: success) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h3 ping -c3 10.0.4.50 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 2  h4 -> h6  Research->External  (expect: success) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h4 ping -c3 10.0.5.60 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 3  h1 -> h2  Student<->Student  (expect: success) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h1 ping -c3 10.0.1.20 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 4  h1 -> h5  Student->Admin  (expect: 100% loss, blocked) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h1 ping -c3 10.0.4.50 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 5  h6 -> h5  External->Admin  (expect: 100% loss, extra policy) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h6 ping -c3 10.0.4.50 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 6  h3 -> h5  TTL=1  (expect: 100% loss, expired at switch) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h3 ping -c2 -t 1 10.0.4.50 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 7  h3 -> 10.0.9.99  unknown dest  (expect: 100% loss, default drop) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h3 ping -c2 10.0.9.99 2>&1 | tee -a /workspace/evidence/terminal-outputs.txt
+sh echo '=== TEST 8  QoS classes: generate ICMP / TCP:80 / UDP:53 / TCP:9999 from h3 to h5 (all captured on s1-eth5) ===' | tee -a /workspace/evidence/terminal-outputs.txt
+h3 ping -c2 10.0.4.50 >/dev/null 2>&1
+sh echo '  sent ICMP        -> class Interactive -> DSCP 46 (tos 0xb8)' | tee -a /workspace/evidence/terminal-outputs.txt
+h3 curl -s -o /dev/null --max-time 2 http://10.0.4.50:80
+sh echo '  sent TCP dst 80  -> class Web         -> DSCP 34 (tos 0x88)' | tee -a /workspace/evidence/terminal-outputs.txt
+h3 python3 -c "import socket; s=socket.socket(2,2); [s.sendto(b'x',('10.0.4.50',53)) for _ in range(3)]"
+sh echo '  sent UDP dst 53  -> class UDP service -> DSCP 26 (tos 0x68)' | tee -a /workspace/evidence/terminal-outputs.txt
+h3 curl -s -o /dev/null --max-time 2 http://10.0.4.50:9999
+sh echo '  sent TCP dst 9999-> class Other       -> DSCP 0  (tos 0x00)' | tee -a /workspace/evidence/terminal-outputs.txt

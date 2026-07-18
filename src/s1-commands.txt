@@ -1,0 +1,17 @@
+table_add sec_policy drop_pkt 10.0.1.0&&&255.255.255.0 10.0.4.0&&&255.255.255.0 => 1
+table_add sec_policy drop_pkt 10.0.5.0&&&255.255.255.0 10.0.4.0&&&255.255.255.0 => 1
+table_add classify set_class 0x01&&&0xff 0&&&0x0000 => 1 1
+table_add classify set_class 0x06&&&0xff 22&&&0xffff => 1 1
+table_add classify set_class 0x06&&&0xff 80&&&0xffff => 2 1
+table_add classify set_class 0x06&&&0xff 443&&&0xffff => 2 1
+table_add classify set_class 0x11&&&0xff 0&&&0x0000 => 3 1
+table_add qos_mark set_dscp 1 => 46
+table_add qos_mark set_dscp 2 => 34
+table_add qos_mark set_dscp 3 => 26
+table_add qos_mark set_dscp 4 => 0
+table_add ipv4_lpm ipv4_forward 10.0.1.10/32 => 00:00:00:00:01:10 1
+table_add ipv4_lpm ipv4_forward 10.0.1.20/32 => 00:00:00:00:01:20 2
+table_add ipv4_lpm ipv4_forward 10.0.2.30/32 => 00:00:00:00:02:30 3
+table_add ipv4_lpm ipv4_forward 10.0.3.40/32 => 00:00:00:00:03:40 4
+table_add ipv4_lpm ipv4_forward 10.0.4.50/32 => 00:00:00:00:04:50 5
+table_add ipv4_lpm ipv4_forward 10.0.5.60/32 => 00:00:00:00:05:60 6

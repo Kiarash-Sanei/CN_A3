@@ -16,3 +16,10 @@ __pycache__/
 *.pyc
 *.swp
 *.tmp
+evidence/
+captures/
+*.mp4
+latex/
+report.pdf
+video-link.txt
+github-link.txt
