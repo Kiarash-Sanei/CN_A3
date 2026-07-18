@@ -11,53 +11,59 @@ match-action tables are filled with static entries loaded over the Thrift CLI.
 src/dataplane.p4       # the P4-16 program (v1model / simple_switch)
 src/s1-commands.txt    # static table entries (simple_switch_CLI format)
 run1.sh                # TERMINAL 1: cleanup -> compile -> Mininet CLI
-run2.sh                # TERMINAL 2: load tables -> capture.sh (pcap)
-collect_evidence.txt   # Mininet source file: host routing + the 8 tests
+run2.sh                # TERMINAL 2: load the static tables into s1
+run3.sh                # TERMINAL 3: read the pcap and show DSCP per class
+collect_evidence.txt   # Mininet source file: host routing + tests + capture
 src/README.md          # this file
 ```
 
 ## Host vs. container
 Everything (p4c, mininet, simple_switch, tcpdump) lives inside the Docker
-container; your host only runs `docker` commands. `run1.sh` / `run2.sh` are host
-launchers that pass the work into the container, so you never have to paste
-commands one by one.
+container; your host only runs `docker` commands. `run1.sh` / `run2.sh` /
+`run3.sh` are host launchers that pass the work into the container, so you never
+paste commands one by one.
 
-## Fast path (three steps, two terminals)
+## How to run (three terminals)
 
-**Terminal 1** — build + compile + start Mininet (uses the starter scripts
+**Terminal 1** — build, compile, start Mininet (uses the starter scripts
 `cleanup.sh`, `compile.sh`, `run_mininet.sh`):
 ```bash
 ./run1.sh
 ```
 Leave it at the `mininet>` prompt.
 
-**Terminal 2** — load the static tables and start the packet capture (uses
-`capture.sh` on `s1-eth5`, the port toward the Admin server):
+**Terminal 2** — load the static table entries into s1:
 ```bash
 ./run2.sh
 ```
 
-**Back in Terminal 1** — run host routing + all tests, saving the log:
+**Back in Terminal 1** — run host routing, all tests, and the capture:
 ```
 mininet> source /workspace/collect_evidence.txt
 ```
-When the tests finish, press **Ctrl+C in Terminal 2** to stop the capture. The
-pcap is written to `captures/capture-s1-eth5-<timestamp>.pcap`.
+`collect_evidence.txt` fixes host routing, runs the 8 tests (saved to
+`evidence/terminal-outputs.txt`), generates one flow of each traffic class from
+h3 to h5, and records everything to `captures/dscp_all.pcap`. It starts and
+stops its own `tcpdump`, so you do not need a separate capture step.
+
+**Terminal 3** — show the DSCP marking for each class:
+```bash
+./run3.sh
+```
 
 ## Why the routing setup is needed
 The starter `topology.py` runs `ip route flush root 0/0` on each host and then
-tries to add a default route via the gateway. The flush also removes the host's
+adds a default route via the gateway. The flush also removes the host's
 connected subnet route, so the default-route add fails ("Nexthop has invalid
-gateway") and every ping reports "Network is unreachable". `collect_evidence.txt`
+gateway") and every ping says "Network is unreachable". `collect_evidence.txt`
 fixes this per host with one line:
 ```
 ip route replace default via 10.0.X.1 dev hX-eth0 onlink
 ```
 `onlink` tells the kernel to treat the gateway as directly reachable, so the
-default route installs without a connected route. The gateway ARP (a single
-gateway MAC `00:aa:bb:00:00:01`) is already set by the topology, so packets then
-reach `s1`, which routes them in the data plane and rewrites the destination MAC
-to the real host MAC.
+route installs without a connected route. The gateway ARP (a single gateway MAC
+`00:aa:bb:00:00:01`) is already set by the topology, so packets then reach `s1`,
+which routes them in the data plane and rewrites the destination MAC.
 
 ## Topology (from starter/topology/topology.py)
 | Host | Role | IP | Port | MAC |
@@ -69,9 +75,9 @@ to the real host MAC.
 | h5 | Admin server | 10.0.4.50 | 5 | 00:00:00:00:04:50 |
 | h6 | External | 10.0.5.60 | 6 | 00:00:00:00:05:60 |
 
-## What the tests check (all run by collect_evidence.txt)
+## Tests (all run by collect_evidence.txt)
 ```
-h3 -> h5   Staff -> Admin       : success (ttl becomes 63, i.e. TTL decremented)
+h3 -> h5   Staff -> Admin       : success (ttl becomes 63, TTL decremented)
 h4 -> h6   Research -> External : success
 h1 -> h2   Student <-> Student  : success
 h1 -> h5   Student -> Admin     : 100% loss (blocked by firewall)
@@ -79,18 +85,19 @@ h6 -> h5   External -> Admin    : 100% loss (extra policy)
 h3 -> h5   TTL=1                : 100% loss (expired at switch)
 h3 -> 10.0.9.99  unknown dest   : 100% loss (default_action drop)
 ```
-Results are saved to `evidence/terminal-outputs.txt`.
 
-## DSCP evidence
-The capture on `s1-eth5` shows the marking. Read it back with:
-```bash
-tcpdump -r captures/capture-s1-eth5-<timestamp>.pcap -vv -n icmp | grep -i tos
+## DSCP evidence (run3.sh)
+`collect_evidence.txt` sends one flow of each class from h3 to h5 and captures
+them; `run3.sh` reads the pcap and shows the marking (only the h3->h5 direction,
+already marked by the switch):
 ```
-ICMP (Interactive) shows `tos 0xb8` = DSCP 46. The same lines show `ttl 63` on
-requests leaving the switch, which also proves the TTL decrement.
-
-DSCP map: Interactive (ICMP, TCP/22) = 46 (0xb8), Web (TCP 80/443) = 34 (0x88),
-UDP service = 26 (0x68), Other = 0.
+ICMP        -> tos 0xb8 = DSCP 46 (Interactive)
+TCP dst 80  -> tos 0x88 = DSCP 34 (Web)
+UDP dst 53  -> tos 0x68 = DSCP 26 (UDP service)
+TCP dst 9999-> tos 0x00 = DSCP 0  (Other)
+```
+The same ICMP lines show `ttl 63` on requests leaving the switch, which also
+proves the TTL decrement.
 
 ## Pipeline (order of tables)
 ```
@@ -109,8 +116,9 @@ marking work. The classification result travels to the QoS stage through
 - `ipv4_lpm`   : LPM     — longest-prefix forwarding on dst IPv4.
 
 ## Other starter helpers
-- `starter/scripts/cleanup.sh` — `mn -c` + kill simple_switch (run between runs).
-- `starter/scripts/capture.sh <iface> <filter>` — the capture used by run2.sh.
+- `starter/scripts/cleanup.sh` — `mn -c` + kill simple_switch (used by run1.sh).
+- `starter/scripts/capture.sh <iface> <filter>` — standalone capture helper (the
+  automated flow above captures inside collect_evidence.txt instead).
 
 ## Notes / limitations
 - Tables are static (no dynamic control plane), as required.
